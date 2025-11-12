@@ -17,8 +17,8 @@ MONITORED_SYMBOLS = [
 ]
 
 # Timeframe Configuration
-DEFAULT_TIMEFRAME_1MIN = True  # Disabled - only using 5min
-DEFAULT_TIMEFRAME_5MIN = False   # Active timeframe
+DEFAULT_TIMEFRAME_1MIN = False  # Disabled - only using 5min
+DEFAULT_TIMEFRAME_5MIN = True   # Active timeframe
 DEFAULT_TIMEFRAME_15MIN = False  # Disabled - only using 5min
 
 # Velocity Thresholds (percentage per minute)
