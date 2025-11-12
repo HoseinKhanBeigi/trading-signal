@@ -14,10 +14,7 @@ DEFAULT_SYMBOL = "btcusdt"
 # Symbols to monitor (at least 20 coins)
 MONITORED_SYMBOLS = [
     "btcusdt", "ethusdt", "bnbusdt", "solusdt", "xrpusdt",
-    "adausdt", "dogeusdt", "dotusdt", "maticusdt", "avaxusdt",
-    "linkusdt", "uniusdt", "ltcusdt", "atomusdt", "etcusdt",
-    "xlmusdt", "algousdt", "vetusdt", "icpusdt", "filusdt",
-    "trxusdt", "eosusdt", "aaveusdt", "nearusdt", "axsusdt"
+    "adausdt", "dogeusdt", "dotusdt"
 ]
 
 # Timeframe Configuration
