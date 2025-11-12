@@ -88,9 +88,12 @@ class AsyncMultiCoinVelocityCalculator:
         self.running = False
         
         # Build WebSocket URL for combined streams
+        # Binance combined streams format: streams should be separated by "/" in the URL
         streams = [f"{symbol}@ticker" for symbol in self.symbols]
         streams_param = "/".join(streams)
         self.ws_url = f"wss://stream.binance.com:9443/stream?streams={streams_param}"
+        
+        # Note: URL will be logged when connection starts
         
         # Thread pool for CPU-bound calculations
         thread_pool_size = config.CALCULATION_THREAD_POOL_SIZE
@@ -320,6 +323,19 @@ class AsyncMultiCoinVelocityCalculator:
         for symbol in symbols_to_process:
             coin_state = self.coin_states.get(symbol)
             if coin_state:
+                # Check if we have enough data before calculating
+                has_data = False
+                if coin_state.timeframe_1min and len(coin_state.price_history_1min) >= 2:
+                    has_data = True
+                if coin_state.timeframe_5min and len(coin_state.price_history_5min) >= 2:
+                    has_data = True
+                if coin_state.timeframe_15min and len(coin_state.price_history_15min) >= 2:
+                    has_data = True
+                
+                if not has_data:
+                    # Skip if not enough data yet
+                    continue
+                
                 # Run CPU-bound calculation in thread pool
                 task = loop.run_in_executor(
                     self.executor,
@@ -334,18 +350,54 @@ class AsyncMultiCoinVelocityCalculator:
             try:
                 results = await task
                 
+                if not results:
+                    # No velocity calculated (insufficient data or time window)
+                    coin_state = self.coin_states.get(symbol)
+                    if coin_state:
+                        # Debug: show why calculation failed
+                        data_counts = []
+                        if coin_state.timeframe_1min:
+                            data_counts.append(f"1min:{len(coin_state.price_history_1min)}")
+                        if coin_state.timeframe_5min:
+                            data_counts.append(f"5min:{len(coin_state.price_history_5min)}")
+                        if coin_state.timeframe_15min:
+                            data_counts.append(f"15min:{len(coin_state.price_history_15min)}")
+                        # Only print debug occasionally to avoid spam
+                        if not hasattr(self, '_last_debug_time') or (datetime.now() - self._last_debug_time).total_seconds() > 60:
+                            print(f"ℹ️  {symbol.upper()}: No velocity calculated yet (data: {', '.join(data_counts)})")
+                            self._last_debug_time = datetime.now()
+                    continue
+                
                 # Process results and queue alerts (async I/O)
                 for result in results:
                     momentum_data = result['momentum_data']
-                    if momentum_data and momentum_data.get('is_high_velocity') and self.alert_service:
-                        await self.alert_service.queue_alert(
-                            result['symbol'],
-                            result['timeframe'],
-                            result['velocity_data'],
-                            momentum_data
-                        )
+                    velocity_data = result['velocity_data']
+                    
+                    # Show calculation result
+                    direction_emoji = "📈" if momentum_data['direction'] == "UP" else "📉"
+                    print(f"📊 {result['symbol'].upper()} {result['timeframe']}: {direction_emoji} "
+                          f"${velocity_data['velocity_usd_per_min']:+,.2f}/min "
+                          f"({velocity_data['velocity_percent_per_min']:+.4f}%/min) - "
+                          f"{momentum_data['momentum_signal']}")
+                    
+                    if momentum_data and momentum_data.get('is_high_velocity'):
+                        if self.alert_service:
+                            await self.alert_service.queue_alert(
+                                result['symbol'],
+                                result['timeframe'],
+                                result['velocity_data'],
+                                momentum_data
+                            )
+                        else:
+                            print(f"⚠️ High velocity detected for {result['symbol']} {result['timeframe']} but no alert service configured")
+                    else:
+                        # Velocity calculated but below threshold
+                        threshold = momentum_data.get('threshold_used', 'N/A')
+                        print(f"   (Below threshold: {threshold}%/min)")
             except Exception as e:
                 print(f"❌ Error calculating velocities for {symbol}: {e}")
+                import traceback
+                traceback.print_exc()
     
     async def _periodic_batch_processor(self):
         """Periodic task to process pending calculations"""
@@ -353,6 +405,30 @@ class AsyncMultiCoinVelocityCalculator:
             await asyncio.sleep(5)  # Process batch every 5 seconds
             if self.pending_calculations:
                 await self._process_calculation_batch()
+            else:
+                # Check if we have data but no pending calculations (force calculation)
+                # This ensures calculations happen even if throttle prevents marking as pending
+                for symbol, coin_state in self.coin_states.items():
+                    if coin_state.current_price and coin_state.last_update_time:
+                        # Check if enough time has passed since last calculation
+                        now = datetime.now()
+                        if coin_state.last_print_time is None or \
+                           (now - coin_state.last_print_time).total_seconds() >= config.DISPLAY_THROTTLE_SECONDS:
+                            # Check if we have enough data
+                            has_enough_data = False
+                            if coin_state.timeframe_1min and len(coin_state.price_history_1min) >= 2:
+                                has_enough_data = True
+                            if coin_state.timeframe_5min and len(coin_state.price_history_5min) >= 2:
+                                has_enough_data = True
+                            if coin_state.timeframe_15min and len(coin_state.price_history_15min) >= 2:
+                                has_enough_data = True
+                            
+                            if has_enough_data:
+                                self.pending_calculations[symbol] = now
+                                coin_state.last_print_time = now
+                
+                if self.pending_calculations:
+                    await self._process_calculation_batch()
     
     async def handle_websocket_message(self, message: str):
         """
@@ -378,11 +454,23 @@ class AsyncMultiCoinVelocityCalculator:
             price = float(ticker_data.get('c', 0))  # 'c' is the current price
             event_time = datetime.fromtimestamp(ticker_data.get('E', time.time() * 1000) / 1000)
             
+            # Diagnostic: Track message count and show periodic updates
+            if not hasattr(self, '_message_count'):
+                self._message_count = 0
+                self._last_message_time = time.time()
+            self._message_count += 1
+            self._last_message_time = time.time()
+            
+            # Print first few messages only
+            if self._message_count <= 3:
+                print(f"📨 Received message #{self._message_count}: {symbol.upper()} = ${price:,.2f}")
+            
             # Process update asynchronously
             await self.process_coin_update(symbol, price, event_time)
             
         except Exception as e:
             print(f"❌ Error processing message: {e}")
+            print(f"   Message content: {message[:200]}...")  # Show first 200 chars for debugging
     
     async def websocket_handler(self):
         """Handle WebSocket connection and messages (async)"""
@@ -396,29 +484,89 @@ class AsyncMultiCoinVelocityCalculator:
         while self.running:
             try:
                 print(f"🔌 Connecting to Binance WebSocket for {len(self.symbols)} coins...")
-                async with websockets.connect(
-                    self.ws_url,
-                    ssl=ssl_context,
-                    ping_interval=20,
-                    ping_timeout=10
-                ) as websocket:
+                # Add connection timeout to detect if connection hangs
+                try:
+                    websocket = await asyncio.wait_for(
+                        websockets.connect(
+                            self.ws_url,
+                            ssl=ssl_context,
+                            ping_interval=20,
+                            ping_timeout=10,
+                            close_timeout=10
+                        ),
+                        timeout=30  # 30 second connection timeout
+                    )
+                except asyncio.TimeoutError:
+                    print("❌ Connection timeout - WebSocket may be blocked or unreachable")
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+                    continue
+                
+                async with websocket:
                     self.websocket = websocket
                     print(f"✅ Connected! Monitoring {len(self.symbols)} coins")
                     print(f"📊 Symbols: {', '.join([s.upper() for s in self.symbols[:10]])}...")
                     reconnect_delay = 1  # Reset delay on successful connection
                     
-                    async for message in websocket:
-                        if not self.running:
-                            break
-                        await self.handle_websocket_message(message)
+                    # Start a heartbeat monitor task
+                    async def heartbeat_monitor():
+                        """Monitor connection health and report if messages stop"""
+                        last_check = time.time()
+                        last_count = getattr(self, '_message_count', 0)
+                        while self.running:
+                            await asyncio.sleep(30)  # Check every 30 seconds
+                            if not self.running:
+                                break
+                            
+                            current_count = getattr(self, '_message_count', 0)
+                            last_msg_time = getattr(self, '_last_message_time', time.time())
+                            time_since_last = time.time() - last_msg_time
+                            
+                            if current_count > last_count:
+                                # Messages are still coming
+                                last_count = current_count
+                            elif time_since_last > 60:
+                                # No messages for over 60 seconds - only warn on actual problems
+                                print(f"⚠️ WARNING: No messages received for {time_since_last:.1f} seconds!")
+                    
+                    heartbeat_task = asyncio.create_task(heartbeat_monitor())
+                    
+                    try:
+                        async for message in websocket:
+                            if not self.running:
+                                break
+                            await self.handle_websocket_message(message)
+                    finally:
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
+                    
+                    # If we exit the message loop, connection was closed
+                    total_messages = getattr(self, '_message_count', 0)
+                    print(f"⚠️ WebSocket message loop ended (received {total_messages} messages total)")
                         
-            except websockets.exceptions.ConnectionClosed:
-                print(f"⚠️ WebSocket connection closed. Reconnecting in {reconnect_delay}s...")
+            except websockets.exceptions.ConnectionClosed as e:
+                total_messages = getattr(self, '_message_count', 0)
+                print(f"⚠️ WebSocket connection closed (code: {e.code}, reason: {e.reason})")
+                print(f"   Received {total_messages} messages before disconnect. Reconnecting in {reconnect_delay}s...")
+                # Reset message count for new connection
+                if hasattr(self, '_message_count'):
+                    delattr(self, '_message_count')
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+                
+            except websockets.exceptions.InvalidStatusCode as e:
+                print(f"❌ WebSocket connection failed with status {e.status_code}: {e.headers}")
+                print(f"   This might indicate the endpoint is blocked or unavailable.")
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
                 
             except Exception as e:
-                print(f"❌ WebSocket error: {e}. Reconnecting in {reconnect_delay}s...")
+                print(f"❌ WebSocket error: {type(e).__name__}: {e}. Reconnecting in {reconnect_delay}s...")
+                import traceback
+                traceback.print_exc()
                 await asyncio.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
     
