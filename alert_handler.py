@@ -43,18 +43,27 @@ class AlertHandler:
                       f"confidence={signal_details['prediction_confidence']*100:.1f}%)")
         logger.warning("="*80)
         
-        if "STRONG" in signal_type:
-            # Trigger system alert with sound for BOTH STRONG BUY and STRONG SELL
-            if "STRONG BUY" in signal_type:
-                self._trigger_system_alert(symbol, signal_type, price, signal_details['predicted_change_pct'], is_buy=True)
-                # Send Telegram notification
-                self._send_telegram_alert(symbol, timeframe, signal_type, signal_strength, 
-                                         velocity, change_pct, price, signal_details)
-            elif "STRONG SELL" in signal_type:
-                self._trigger_system_alert(symbol, signal_type, price, signal_details['predicted_change_pct'], is_buy=False)
-                # Send Telegram notification
-                self._send_telegram_alert(symbol, timeframe, signal_type, signal_strength, 
-                                         velocity, change_pct, price, signal_details)
+        # Handle STRONG BUY signals
+        if "STRONG BUY" in signal_type and signal_strength == "VERY STRONG":
+            logger.info(f"Triggering alerts for STRONG BUY signal: {symbol}")
+            # Trigger system alert with sound
+            self._trigger_system_alert(symbol, signal_type, price, signal_details['predicted_change_pct'], is_buy=True)
+            # Send Telegram notification
+            self._send_telegram_alert(symbol, timeframe, signal_type, signal_strength, 
+                                     velocity, change_pct, price, signal_details)
+        
+        # Handle STRONG SELL signals
+        elif "STRONG SELL" in signal_type and signal_strength == "VERY STRONG":
+            logger.info(f"Triggering alerts for STRONG SELL signal: {symbol}")
+            # Trigger system alert with sound
+            self._trigger_system_alert(symbol, signal_type, price, signal_details['predicted_change_pct'], is_buy=False)
+            # Send Telegram notification
+            self._send_telegram_alert(symbol, timeframe, signal_type, signal_strength, 
+                                     velocity, change_pct, price, signal_details)
+        
+        # Log if signal is STRONG but doesn't match expected patterns
+        elif "STRONG" in signal_type:
+            logger.warning(f"STRONG signal detected but not matched: {signal_type} (strength: {signal_strength})")
     
     def _trigger_system_alert(self, symbol: str, signal_type: str, price: float, predicted_change: float, is_buy: bool = True):
         """
