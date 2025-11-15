@@ -1,56 +1,66 @@
-#!/usr/bin/env python3
 """
-Configuration Module
-Contains configuration constants and settings for the BTC Velocity Calculator.
+Configuration settings for the crypto signal tracker
 """
 
-# Telegram Configuration
+# Cryptocurrency symbols to track
+SYMBOLS = ['BTC', 'ETH', 'DOGE', 'XRP']
+
+# Timeframes in minutes
+TIMEFRAMES = [3]  # 3 minutes only
+
+# Signal thresholds (in %/min)
+WEAK_THRESHOLD = 0.05   # Weak signal: velocity > 0.05 %/min
+STRONG_THRESHOLD = 0.15  # Strong signal: velocity > 0.15 %/min
+
+# Signal check interval in seconds
+CHECK_INTERVAL = 1.0
+
+# Data collection settings
+# IMPORTANT: Data collection is DISABLED by default
+# Data collection and training are SEPARATE processes:
+#   1. Collect data: python3 historical_data_collector.py
+#   2. Train model: python3 train_model.py
+#   3. Run app: python3 main.py (uses trained model, does NOT collect data)
+COLLECT_DATA = False  # Set to False - main app does NOT collect data
+COLLECT_PRICES = False  # Set to False - main app does NOT save prices
+COLLECT_FEATURES = False  # Set to False - main app does NOT save features
+COLLECT_SIGNALS = False  # Set to False - main app does NOT save signals
+
+# WebSocket settings
+BINANCE_WS_URL = "wss://stream.binance.com:9443/stream"
+
+# Technical indicator settings
+RSI_PERIOD = 14
+EMA_PERIOD = 9
+PREDICTION_MINUTES_AHEAD = 5
+
+# MACD settings
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+
+# Bollinger Bands settings
+BB_PERIOD = 20
+BB_STD_DEV = 2.0
+
+# Stochastic settings
+STOCH_K_PERIOD = 14
+STOCH_D_PERIOD = 3
+
+# ATR settings
+ATR_PERIOD = 14
+
+# ADX settings
+ADX_PERIOD = 14
+
+# EMA Crossover settings
+EMA_FAST = 9
+EMA_SLOW = 21
+
+# Telegram Bot settings
+# SECURITY NOTE: Keep your bot token secure. Don't share it publicly.
+# To get your chat ID, message @userinfobot on Telegram
 TELEGRAM_BOT_TOKEN = "7909173256:AAF9M8mc0QYmtO9SUYQPv6XkrPkAz2P_ImU"
-TELEGRAM_CHAT_IDS = [193418752]
-
-# Trading Pair Configuration
-DEFAULT_SYMBOL = "btcusdt"
-
-# Symbols to monitor (at least 20 coins)
-MONITORED_SYMBOLS = [
-    "btcusdt", "ethusdt"
-]
-
-# Timeframe Configuration
-DEFAULT_TIMEFRAME_1MIN = False  # Disabled - only using 5min
-DEFAULT_TIMEFRAME_5MIN = True   # Active timeframe
-DEFAULT_TIMEFRAME_15MIN = False  # Disabled - only using 5min
-
-# Velocity Thresholds (percentage per minute)
-HIGH_VELOCITY_THRESHOLD_1MIN = 0.1   # 0.1% per minute = high velocity for 1min
-HIGH_VELOCITY_THRESHOLD_5MIN = 0.05  # 0.05% per minute = high velocity for 5min
-HIGH_VELOCITY_THRESHOLD_15MIN = 0.03 # 0.03% per minute = high velocity for 15min
-
-# Alternative: USD per minute threshold (adjust based on BTC price range)
-HIGH_VELOCITY_USD_THRESHOLD = 50  # $50 per minute = high velocity
-
-# Price History Configuration
-PRICE_HISTORY_MAXLEN = 100  # Store last 100 data points
-
-# Notification Configuration
-NOTIFICATION_COOLDOWN_MINUTES = 2  # Don't send duplicate notifications within 2 minutes
-
-# Display Configuration
-DISPLAY_THROTTLE_SECONDS = 60  # Throttle printing to once per minute
-
-# Velocity Calculation Configuration
-MIN_TIME_REQUIRED_PERCENT = 0.5  # Require at least 50% of the timeframe for valid velocity calculation
-
-# Performance Optimization for 200+ coins
-# Thread pool size for CPU-bound calculations (None = auto-detect based on CPU cores)
-CALCULATION_THREAD_POOL_SIZE = None  # None = min(32, (os.cpu_count() or 1) + 4)
-# Batch size for processing coins in parallel
-CALCULATION_BATCH_SIZE = 50  # Process 50 coins at a time
-
-# Telegram SSL/Networking
-# Set to False to bypass certificate verification (use only if you understand the risk)
-# Disabled due to corporate proxy/SSL intercept issues
-TELEGRAM_SSL_VERIFY = False
-# Optional path to a custom CA bundle file if you are behind a corporate proxy/SSL intercept
-TELEGRAM_CA_BUNDLE_PATH = None
+TELEGRAM_CHAT_IDS = [193418752]  # List of chat IDs to send alerts to
+TELEGRAM_ENABLED = True  # Set to False to disable Telegram notifications
 

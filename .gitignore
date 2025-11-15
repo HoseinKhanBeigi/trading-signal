@@ -1,0 +1,49 @@
+# Data files (excluded from git)
+data/
+*.jsonl
+
+# Trained models (large files, user-specific)
+# Exclude checkpoints but allow main model for deployment
+models/patchtst_checkpoint_*.pth
+models/*.mlmodel
+# Allow main model: models/patchtst_crypto.pth (for deployment)
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.local
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
