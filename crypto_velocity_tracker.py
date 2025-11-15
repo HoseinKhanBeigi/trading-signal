@@ -4,6 +4,7 @@ Main Crypto Velocity Tracker - Orchestrates all components
 
 import time
 import threading
+from datetime import datetime
 from typing import Dict, List
 from price_tracker import PriceTracker
 from indicators import TechnicalIndicators
@@ -40,6 +41,13 @@ class CryptoVelocityTracker:
         self.strong_threshold = strong_threshold
         self.last_signals = {symbol: {tf: None for tf in timeframes} for symbol in self.symbols}
         
+        # Logging control
+        self.last_status_print = 0
+        self.status_interval = 5.0  # Print status every 5 seconds
+        self.price_update_count = {symbol: 0 for symbol in self.symbols}
+        self.last_signal_log = {symbol: {tf: 0.0 for tf in timeframes} for symbol in self.symbols}
+        self.signal_log_interval = 3.0  # Log signal check every 3 seconds or when signal changes
+        
         # Initialize components
         self.price_tracker = PriceTracker(symbols, timeframes)
         self.indicators = TechnicalIndicators(self.price_tracker)
@@ -57,8 +65,19 @@ class CryptoVelocityTracker:
         """Callback when price updates from WebSocket"""
         with self.lock:
             if symbol in self.symbols:
+                old_price = self.current_prices.get(symbol)
                 self.current_prices[symbol] = price
                 self.price_tracker.update_price_history(symbol, price, timestamp)
+                self.price_update_count[symbol] = self.price_update_count.get(symbol, 0) + 1
+                
+                # Log price update (every 10th update to avoid spam)
+                if self.price_update_count[symbol] % 10 == 0:
+                    change_str = ""
+                    if old_price and old_price > 0:
+                        change_pct = ((price - old_price) / old_price) * 100
+                        change_str = f" ({change_pct:+.3f}%)"
+                    print(f"📊 {symbol}/USDT: ${price:.4f}{change_str} | Updates: {self.price_update_count[symbol]}")
+                
                 # Save price data to file (if enabled)
                 if self.data_collector and COLLECT_PRICES:
                     self.data_collector.save_price_data(symbol, price, timestamp)
@@ -109,9 +128,17 @@ class CryptoVelocityTracker:
         return results
     
     def check_and_alert(self, symbol: str, timeframe: int, velocity: float, 
-                       change_pct: float, current_price: float):
+                       change_pct: float, current_price: float, verbose: bool = True):
         """
         Check for signals and alert if new signal detected
+        
+        Args:
+            symbol: Cryptocurrency symbol
+            timeframe: Timeframe in minutes
+            velocity: Price velocity
+            change_pct: Price change percentage
+            current_price: Current price
+            verbose: Whether to print signal check results
         """
         if velocity is None:
             return
@@ -123,6 +150,25 @@ class CryptoVelocityTracker:
         signal_type, signal_strength, signal_details = self.signal_generator.generate_signal(
             symbol, timeframe, velocity, change_pct, current_price)
         last_signal = self.last_signals[symbol][timeframe]
+        
+        # Log signal check result (only if signal changed or enough time passed)
+        if verbose:
+            current_time = time.time()
+            last_log_time = self.last_signal_log.get(symbol, {}).get(timeframe, 0.0)
+            signal_changed = (last_signal != signal_type)
+            time_passed = (current_time - last_log_time) >= self.signal_log_interval
+            
+            if signal_changed or time_passed:
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                signal_icon = "🔔" if signal_strength == "VERY STRONG" else "📊"
+                change_indicator = " ⚡ CHANGED" if signal_changed else ""
+                print(f"{signal_icon} [{timestamp}] {symbol}/USDT ({timeframe}min): {signal_type}{change_indicator} | "
+                      f"Velocity: {velocity:+.4f} %/min | Change: {change_pct:+.3f}% | "
+                      f"Price: ${current_price:.4f} | RSI: {signal_details.get('rsi', 0):.1f}")
+                
+                if symbol not in self.last_signal_log:
+                    self.last_signal_log[symbol] = {}
+                self.last_signal_log[symbol][timeframe] = current_time
         
         # Don't alert for HOLD/NEUTRAL signals
         if signal_type == "HOLD ⏸️" or signal_strength == "NEUTRAL":
@@ -155,14 +201,64 @@ class CryptoVelocityTracker:
                     **signal_details
                 })
     
+    def _print_status_summary(self, results: Dict):
+        """Print periodic status summary for all symbols"""
+        current_time = time.time()
+        if current_time - self.last_status_print < self.status_interval:
+            return
+        
+        self.last_status_print = current_time
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        print("\n" + "="*80)
+        print(f"📈 STATUS UPDATE - {timestamp}")
+        print("="*80)
+        
+        for symbol in self.symbols:
+            current_price = self.current_prices.get(symbol)
+            if current_price is None:
+                print(f"⏳ {symbol}/USDT: Waiting for price data...")
+                continue
+            
+            for timeframe in self.timeframes:
+                tf_key = f"{timeframe}min"
+                if tf_key not in results.get(symbol, {}):
+                    continue
+                
+                data = results[symbol][tf_key]
+                velocity = data.get("velocity", 0.0)
+                change_pct = data.get("change_percent", 0.0)
+                signal_type = data.get("signal", "HOLD ⏸️")
+                signal_strength = data.get("signal_strength", "NEUTRAL")
+                signal_details = data.get("signal_details", {})
+                data_points = data.get("data_points", 0)
+                
+                # Get key indicators
+                rsi = signal_details.get('rsi', 0)
+                momentum = signal_details.get('momentum', 0)
+                trend = signal_details.get('trend_strength', 0) * 100
+                predicted_change = signal_details.get('predicted_change_pct', 0)
+                
+                print(f"\n💰 {symbol}/USDT ({timeframe}min):")
+                print(f"   Price: ${current_price:.4f} | Change: {change_pct:+.3f}% | Velocity: {velocity:+.4f} %/min")
+                print(f"   Signal: {signal_type} ({signal_strength})")
+                print(f"   Indicators: RSI={rsi:.1f} | Momentum={momentum:+.4f} | Trend={trend:.1f}%")
+                print(f"   AI Prediction: {predicted_change:+.3f}% (5min ahead)")
+                print(f"   Data Points: {data_points}/{timeframe*20} (need {timeframe*20} for full analysis)")
+        
+        print("="*80 + "\n")
+    
     def _signal_check_loop(self, check_interval: float = 1.0):
-        """Check for signals in background - only prints alerts, no dashboard"""
+        """Check for signals in background - prints all signal checks and alerts"""
         while self.running:
             try:
                 with self.lock:
                     results = self.get_all_velocities()
                 
-                # Check for signals and alert (only prints when signal detected)
+                # Print periodic status summary
+                self._print_status_summary(results)
+                
+                # Check for signals and alert (prints all signal checks)
                 for symbol in self.symbols:
                     current_price = self.current_prices.get(symbol)
                     if current_price is None:
@@ -170,18 +266,22 @@ class CryptoVelocityTracker:
                     
                     for timeframe in self.timeframes:
                         tf_key = f"{timeframe}min"
-                        data = results[symbol][tf_key]
+                        if tf_key not in results.get(symbol, {}):
+                            continue
                         
+                        data = results[symbol][tf_key]
                         velocity = data.get("velocity")
                         if velocity is not None:
                             change_pct = data.get("change_percent", 0.0)
                             # Check and alert for 3min timeframe only
                             if timeframe == 3:
-                                self.check_and_alert(symbol, timeframe, velocity, change_pct, current_price)
+                                self.check_and_alert(symbol, timeframe, velocity, change_pct, current_price, verbose=True)
                 
                 time.sleep(check_interval)
             except Exception as e:
-                print(f"Error in signal check loop: {e}")
+                print(f"❌ Error in signal check loop: {e}")
+                import traceback
+                traceback.print_exc()
     
     def run_continuous(self, check_interval: float = 1.0):
         """
@@ -195,7 +295,11 @@ class CryptoVelocityTracker:
         print(f"Timeframes: {', '.join([f'{tf}min' for tf in self.timeframes])}")
         print(f"Signal Thresholds: Weak={self.weak_threshold} %/min | Strong={self.strong_threshold} %/min")
         print("Connecting to Binance WebSocket...")
-        print("Waiting for signals... (only alerts will be shown)\n")
+        print("\n📊 Real-time logging enabled:")
+        print("   • Price updates (every 10th update)")
+        print("   • Signal checks (every check)")
+        print("   • Status summary (every 5 seconds)")
+        print("   • STRONG BUY/SELL alerts (with sound & Telegram)\n")
         print("Press Ctrl+C to stop\n")
         
         self.running = True
