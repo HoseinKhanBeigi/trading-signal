@@ -7,6 +7,9 @@ import os
 from datetime import datetime
 from typing import Dict, List
 import threading
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class DataCollector:
@@ -44,7 +47,7 @@ class DataCollector:
                 with open(filename, 'a') as f:
                     f.write(json.dumps(data) + '\n')
             except Exception as e:
-                print(f"Error saving price data: {e}")
+                logger.error(f"Error saving price data: {e}", exc_info=True)
     
     def save_feature_sequence(self, symbol: str, features: List, 
                               target_price_change: float = None, 
@@ -66,7 +69,7 @@ class DataCollector:
         try:
             converted_features = convert_to_list(features)
         except Exception as e:
-            print(f"Error converting features: {e}")
+            logger.error(f"Error converting features: {e}", exc_info=True)
             return
         
         # Use provided timestamp or create one (rounded to minutes)
@@ -86,7 +89,7 @@ class DataCollector:
                 with open(filename, 'a') as f:
                     f.write(json.dumps(data) + '\n')
             except Exception as e:
-                print(f"Error saving feature data: {e}")
+                logger.error(f"Error saving feature data: {e}", exc_info=True)
     
     def save_signal(self, symbol: str, signal_data: Dict):
         """Save signal data"""
@@ -103,7 +106,7 @@ class DataCollector:
                 with open(filename, 'a') as f:
                     f.write(json.dumps(data) + '\n')
             except Exception as e:
-                print(f"Error saving signal data: {e}")
+                logger.error(f"Error saving signal data: {e}", exc_info=True)
     
     def get_collected_data_stats(self) -> Dict:
         """Get statistics about collected data"""
@@ -180,7 +183,7 @@ class DataCollector:
                         elif isinstance(features[0], list) and len(features) >= min_sequences:
                             training_data.append((features, target))
         except Exception as e:
-            print(f"Error loading training data: {e}")
+            logger.error(f"Error loading training data: {e}", exc_info=True)
             return []
         
         # Create sequences from individual feature vectors

@@ -7,6 +7,9 @@ import numpy as np
 from ai_predictor import AIPredictor
 from data_collector import DataCollector
 from config import COLLECT_DATA, COLLECT_FEATURES
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class PricePredictor:
@@ -35,11 +38,13 @@ class PricePredictor:
         # Initialize AI predictor for feature preparation (needed even when use_ai=False)
         try:
             self.ai_predictor = AIPredictor()
+            logger.info("AI predictor initialized successfully")
         except Exception as e:
-            print(f"Could not initialize AI predictor: {e}. Feature preparation may fail.")
+            logger.error(f"Could not initialize AI predictor: {e}. Feature preparation may fail.")
             self.ai_predictor = None
             if use_ai:
                 self.use_ai = False
+                logger.warning("AI prediction disabled due to initialization failure")
     
     def predict_price(self, current_price: float, velocity: float, 
                      momentum: float, rsi: float, 
@@ -102,6 +107,9 @@ class PricePredictor:
                     
                     if ai_result["method"] == "ai_patchtst":
                         # Use AI prediction
+                        logger.debug(f"Using AI prediction for {symbol}: "
+                                   f"predicted_change={ai_result['predicted_change_pct']:+.3f}%, "
+                                   f"confidence={ai_result['confidence']:.2f}")
                         return {
                             "predicted_price": ai_result["predicted_price"],
                             "predicted_change_pct": ai_result["predicted_change_pct"],
@@ -110,7 +118,7 @@ class PricePredictor:
                             "method": "ai"
                         }
             except Exception as e:
-                print(f"AI prediction failed: {e}. Using rule-based.")
+                logger.warning(f"AI prediction failed: {e}. Using rule-based.")
         
         # Fallback to rule-based prediction
         return self._rule_based_prediction(

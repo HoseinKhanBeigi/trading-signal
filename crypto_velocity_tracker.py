@@ -14,6 +14,9 @@ from websocket_handler import WebSocketHandler
 from alert_handler import AlertHandler
 from data_collector import DataCollector
 from config import COLLECT_DATA, COLLECT_PRICES, COLLECT_FEATURES, COLLECT_SIGNALS
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class CryptoVelocityTracker:
@@ -76,7 +79,7 @@ class CryptoVelocityTracker:
                     if old_price and old_price > 0:
                         change_pct = ((price - old_price) / old_price) * 100
                         change_str = f" ({change_pct:+.3f}%)"
-                    print(f"📊 {symbol}/USDT: ${price:.4f}{change_str} | Updates: {self.price_update_count[symbol]}")
+                    logger.debug(f"{symbol}/USDT: ${price:.4f}{change_str} | Updates: {self.price_update_count[symbol]}")
                 
                 # Save price data to file (if enabled)
                 if self.data_collector and COLLECT_PRICES:
@@ -160,11 +163,15 @@ class CryptoVelocityTracker:
             
             if signal_changed or time_passed:
                 timestamp = datetime.now().strftime("%H:%M:%S")
-                signal_icon = "🔔" if signal_strength == "VERY STRONG" else "📊"
                 change_indicator = " ⚡ CHANGED" if signal_changed else ""
-                print(f"{signal_icon} [{timestamp}] {symbol}/USDT ({timeframe}min): {signal_type}{change_indicator} | "
-                      f"Velocity: {velocity:+.4f} %/min | Change: {change_pct:+.3f}% | "
-                      f"Price: ${current_price:.4f} | RSI: {signal_details.get('rsi', 0):.1f}")
+                log_msg = f"[{timestamp}] {symbol}/USDT ({timeframe}min): {signal_type}{change_indicator} | " \
+                         f"Velocity: {velocity:+.4f} %/min | Change: {change_pct:+.3f}% | " \
+                         f"Price: ${current_price:.4f} | RSI: {signal_details.get('rsi', 0):.1f}"
+                
+                if signal_strength == "VERY STRONG":
+                    logger.warning(log_msg)  # Use WARNING level for strong signals
+                else:
+                    logger.info(log_msg)
                 
                 if symbol not in self.last_signal_log:
                     self.last_signal_log[symbol] = {}
@@ -210,14 +217,14 @@ class CryptoVelocityTracker:
         self.last_status_print = current_time
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        print("\n" + "="*80)
-        print(f"📈 STATUS UPDATE - {timestamp}")
-        print("="*80)
+        logger.info("="*80)
+        logger.info(f"STATUS UPDATE - {timestamp}")
+        logger.info("="*80)
         
         for symbol in self.symbols:
             current_price = self.current_prices.get(symbol)
             if current_price is None:
-                print(f"⏳ {symbol}/USDT: Waiting for price data...")
+                logger.debug(f"{symbol}/USDT: Waiting for price data...")
                 continue
             
             for timeframe in self.timeframes:
@@ -239,14 +246,13 @@ class CryptoVelocityTracker:
                 trend = signal_details.get('trend_strength', 0) * 100
                 predicted_change = signal_details.get('predicted_change_pct', 0)
                 
-                print(f"\n💰 {symbol}/USDT ({timeframe}min):")
-                print(f"   Price: ${current_price:.4f} | Change: {change_pct:+.3f}% | Velocity: {velocity:+.4f} %/min")
-                print(f"   Signal: {signal_type} ({signal_strength})")
-                print(f"   Indicators: RSI={rsi:.1f} | Momentum={momentum:+.4f} | Trend={trend:.1f}%")
-                print(f"   AI Prediction: {predicted_change:+.3f}% (5min ahead)")
-                print(f"   Data Points: {data_points}/{timeframe*20} (need {timeframe*20} for full analysis)")
+                logger.info(f"{symbol}/USDT ({timeframe}min): Price: ${current_price:.4f} | "
+                           f"Change: {change_pct:+.3f}% | Velocity: {velocity:+.4f} %/min | "
+                           f"Signal: {signal_type} ({signal_strength}) | "
+                           f"RSI={rsi:.1f} | Momentum={momentum:+.4f} | Trend={trend:.1f}% | "
+                           f"AI Prediction: {predicted_change:+.3f}% | Data Points: {data_points}/{timeframe*20}")
         
-        print("="*80 + "\n")
+        logger.info("="*80)
     
     def _signal_check_loop(self, check_interval: float = 1.0):
         """Check for signals in background - prints all signal checks and alerts"""
@@ -279,9 +285,7 @@ class CryptoVelocityTracker:
                 
                 time.sleep(check_interval)
             except Exception as e:
-                print(f"❌ Error in signal check loop: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"Error in signal check loop: {e}", exc_info=True)
     
     def run_continuous(self, check_interval: float = 1.0):
         """
@@ -290,17 +294,13 @@ class CryptoVelocityTracker:
         Args:
             check_interval: Signal check interval in seconds (default: 1.0 second)
         """
-        print(f"Starting WebSocket-based signal tracker...")
-        print(f"Symbols: {', '.join(self.symbols)}")
-        print(f"Timeframes: {', '.join([f'{tf}min' for tf in self.timeframes])}")
-        print(f"Signal Thresholds: Weak={self.weak_threshold} %/min | Strong={self.strong_threshold} %/min")
-        print("Connecting to Binance WebSocket...")
-        print("\n📊 Real-time logging enabled:")
-        print("   • Price updates (every 10th update)")
-        print("   • Signal checks (every check)")
-        print("   • Status summary (every 5 seconds)")
-        print("   • STRONG BUY/SELL alerts (with sound & Telegram)\n")
-        print("Press Ctrl+C to stop\n")
+        logger.info("Starting WebSocket-based signal tracker...")
+        logger.info(f"Symbols: {', '.join(self.symbols)}")
+        logger.info(f"Timeframes: {', '.join([f'{tf}min' for tf in self.timeframes])}")
+        logger.info(f"Signal Thresholds: Weak={self.weak_threshold} %/min | Strong={self.strong_threshold} %/min")
+        logger.info("Connecting to Binance WebSocket...")
+        logger.info("Real-time logging enabled: Price updates, Signal checks, Status summary, STRONG BUY/SELL alerts")
+        logger.info("Press Ctrl+C to stop")
         
         self.running = True
         
@@ -313,10 +313,10 @@ class CryptoVelocityTracker:
             self.ws_handler.connect()
             
         except KeyboardInterrupt:
-            print("\n\nStopping tracker...")
+            logger.info("Stopping tracker...")
             self.running = False
             self.ws_handler.close()
-            print(f"Total signals detected: {self.alert_handler.signal_count}")
+            logger.info(f"Total signals detected: {self.alert_handler.signal_count}")
         except Exception as e:
-            print(f"Error: {e}")
+            logger.error(f"Error: {e}", exc_info=True)
             self.running = False

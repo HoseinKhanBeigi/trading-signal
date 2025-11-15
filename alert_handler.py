@@ -9,6 +9,9 @@ import subprocess
 import platform
 import requests
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS, TELEGRAM_ENABLED
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class AlertHandler:
@@ -27,15 +30,20 @@ class AlertHandler:
         self.signal_count += 1
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        # Visual alert with colors and emphasis
-        print("\n" + "="*80)
-        print(f"🔔 CRYPTO SIGNAL #{self.signal_count} - {timestamp}")
-        print("="*80)
+        # Log alert signal
+        logger.warning("="*80)
+        logger.warning(f"CRYPTO SIGNAL #{self.signal_count} - {timestamp}")
+        logger.warning("="*80)
+        logger.warning(f"{signal_type} - {signal_strength}")
+        logger.warning(f"Symbol: {symbol}/USDT | Timeframe: {timeframe}min | Price: ${price:.4f}")
+        logger.warning(f"Velocity: {velocity:+.4f} %/min | Momentum: {signal_details['momentum']:+.4f} | "
+                      f"Trend: {signal_details['trend_strength']*100:.1f}% | RSI: {signal_details['rsi']:.2f}")
+        logger.warning(f"Predicted: ${signal_details['predicted_price']:.4f} "
+                      f"({signal_details['predicted_change_pct']:+.3f}%, "
+                      f"confidence={signal_details['prediction_confidence']*100:.1f}%)")
+        logger.warning("="*80)
         
         if "STRONG" in signal_type:
-            # Strong signals get extra emphasis
-            print(f"⚠️  {signal_type} - {signal_strength}")
-            
             # Trigger system alert with sound for BOTH STRONG BUY and STRONG SELL
             if "STRONG BUY" in signal_type:
                 self._trigger_system_alert(symbol, signal_type, price, signal_details['predicted_change_pct'], is_buy=True)
@@ -47,26 +55,6 @@ class AlertHandler:
                 # Send Telegram notification
                 self._send_telegram_alert(symbol, timeframe, signal_type, signal_strength, 
                                          velocity, change_pct, price, signal_details)
-        else:
-            print(f"   {signal_type} - {signal_strength}")
-        
-        print(f"\n   Symbol: {symbol}/USDT")
-        print(f"   Timeframe: {timeframe}min")
-        print(f"   Current Price: ${price:.4f}")
-        print(f"\n   📊 ALL TRADING PARAMETERS:")
-        print(f"   • Velocity: {velocity:+.4f} %/min")
-        print(f"   • Momentum: {signal_details['momentum']:+.4f} (acceleration)")
-        print(f"   • Trend Strength: {signal_details['trend_strength']*100:.1f}% (consistency)")
-        print(f"   • RSI: {signal_details['rsi']:.2f} ({'Overbought' if signal_details['rsi'] > 70 else 'Oversold' if signal_details['rsi'] < 30 else 'Neutral'})")
-        print(f"   • EMA: ${signal_details['ema']:.4f} (Price {signal_details['ema_position']})")
-        print(f"   • Support: ${signal_details['support']:.4f} | Resistance: ${signal_details['resistance']:.4f}")
-        print(f"   • Price Position: {signal_details['price_position']}")
-        print(f"   • Current Change: {change_pct:+.3f}%")
-        print(f"\n   🔮 PRICE PREDICTION (5 min ahead):")
-        print(f"   • Predicted Price: ${signal_details['predicted_price']:.4f}")
-        print(f"   • Predicted Change: {signal_details['predicted_change_pct']:+.3f}%")
-        print(f"   • Confidence: {signal_details['prediction_confidence']*100:.1f}%")
-        print("="*80 + "\n")
     
     def _trigger_system_alert(self, symbol: str, signal_type: str, price: float, predicted_change: float, is_buy: bool = True):
         """
@@ -169,15 +157,15 @@ class AlertHandler:
                 
                 if response.status_code == 200:
                     # Success - message sent
-                    pass
+                    logger.debug(f"Telegram notification sent successfully to chat {chat_id}")
                 else:
                     # Log error but don't interrupt main flow
-                    print(f"⚠️  Telegram send failed for chat {chat_id}: {response.status_code}")
+                    logger.warning(f"Telegram send failed for chat {chat_id}: {response.status_code}")
                     
         except requests.exceptions.RequestException as e:
-            # Network error - silently fail
-            pass
+            # Network error - log but don't interrupt main flow
+            logger.warning(f"Telegram network error: {e}")
         except Exception as e:
-            # Any other error - silently fail
-            pass
+            # Any other error - log but don't interrupt main flow
+            logger.warning(f"Telegram error: {e}")
 

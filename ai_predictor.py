@@ -11,6 +11,9 @@ from typing import Dict, List, Tuple, Optional
 import os
 import pickle
 import psutil
+from logger_config import get_logger
+
+logger = get_logger("model.ai_predictor")
 
 
 class PatchTST(nn.Module):
@@ -266,9 +269,9 @@ class AIPredictor:
         # Detect device (MPS for Mac GPU, fallback to CPU)
         self.device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
         if self.device.type == "mps":
-            print(f"✅ Using MPS (Mac GPU) for acceleration")
+            logger.info("Using MPS (Mac GPU) for acceleration")
         else:
-            print(f"⚠️  MPS not available, using CPU")
+            logger.warning("MPS not available, using CPU")
         
         # Create models directory
         os.makedirs("models", exist_ok=True)
@@ -297,13 +300,15 @@ class AIPredictor:
             try:
                 self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
                 self.is_trained = True
-                print(f"Loaded trained model from {self.model_path}")
+                logger.info(f"Loaded trained model from {self.model_path}")
+                logger.debug(f"Model architecture: seq_len={self.model.seq_len}, pred_len={self.model.pred_len}, "
+                           f"d_model={self.model.d_model}, n_features={self.model.n_features}")
             except Exception as e:
-                print(f"Could not load model: {e}. Using untrained model.")
+                logger.warning(f"Could not load model: {e}. Using untrained model.")
                 self.is_trained = False
         else:
             self.is_trained = False
-            print("No trained model found. Model will use default predictions.")
+            logger.warning("No trained model found. Model will use default predictions.")
     
     def prepare_features(self, indicators: Dict) -> np.ndarray:
         """
@@ -328,7 +333,11 @@ class AIPredictor:
             indicators.get('adx', 0.0) / 100.0  # Normalize
         ]
         
-        return np.array(features, dtype=np.float32)
+        feature_array = np.array(features, dtype=np.float32)
+        logger.debug(f"Prepared features: velocity={features[0]:.4f}, momentum={features[1]:.4f}, "
+                    f"rsi={features[2]:.3f}, trend={features[4]:.3f}")
+        
+        return feature_array
     
     def predict(self, feature_history: List[np.ndarray], 
                 current_price: float) -> Dict:
@@ -343,6 +352,8 @@ class AIPredictor:
             Dictionary with prediction and confidence
         """
         if not self.is_trained or len(feature_history) < 60:
+            logger.debug(f"Using fallback prediction: is_trained={self.is_trained}, "
+                        f"history_len={len(feature_history)}, current_price={current_price:.4f}")
             # Fallback to simple prediction if model not trained or insufficient data
             return {
                 "predicted_price": current_price,
@@ -356,17 +367,29 @@ class AIPredictor:
             seq_len = min(60, len(feature_history))
             features_seq = feature_history[-seq_len:]
             
+            logger.debug(f"Model input: seq_len={seq_len}, history_length={len(feature_history)}, "
+                        f"current_price={current_price:.4f}")
+            
             # Pad if needed
             if len(features_seq) < 60:
-                padding = np.zeros((60 - len(features_seq), 10), dtype=np.float32)
+                padding_size = 60 - len(features_seq)
+                padding = np.zeros((padding_size, 10), dtype=np.float32)
                 features_seq = np.concatenate([padding, features_seq], axis=0)
+                logger.debug(f"Padded input sequence: added {padding_size} zero-padding rows")
             
             # Convert list of arrays to single numpy array first (faster)
             if isinstance(features_seq, list):
                 features_seq = np.array(features_seq, dtype=np.float32)
             
+            # Log input statistics
+            logger.debug(f"Input tensor shape: {features_seq.shape}, "
+                        f"mean={features_seq.mean():.4f}, std={features_seq.std():.4f}, "
+                        f"min={features_seq.min():.4f}, max={features_seq.max():.4f}")
+            
             # Convert to tensor and move to device
             input_tensor = torch.FloatTensor(features_seq).unsqueeze(0).to(self.device)  # [1, seq_len, n_features]
+            
+            logger.debug(f"Input tensor on device: {self.device}, shape: {input_tensor.shape}")
             
             # Predict
             self.model.eval()
@@ -374,12 +397,19 @@ class AIPredictor:
                 prediction = self.model(input_tensor)  # [1, pred_len]
                 predicted_change_normalized = prediction[0, -1].item()  # Get last prediction
             
+            logger.debug(f"Model output: raw_prediction={prediction[0].cpu().numpy()}, "
+                        f"normalized_change={predicted_change_normalized:.6f}")
+            
             # Denormalize prediction (we normalized targets by dividing by 10)
             predicted_change_pct = predicted_change_normalized * 10.0  # Scale back up
             predicted_price = current_price * (1 + predicted_change_pct / 100)
             
             # Calculate confidence (based on model certainty)
             confidence = min(0.9, 0.5 + abs(predicted_change_normalized) * 2)
+            
+            logger.info(f"Model prediction: current_price=${current_price:.4f} -> "
+                       f"predicted_price=${predicted_price:.4f} "
+                       f"(change={predicted_change_pct:+.3f}%, confidence={confidence:.2f})")
             
             return {
                 "predicted_price": predicted_price,
@@ -389,7 +419,7 @@ class AIPredictor:
             }
             
         except Exception as e:
-            print(f"AI prediction error: {e}")
+            logger.error(f"AI prediction error: {e}", exc_info=True)
             return {
                 "predicted_price": current_price,
                 "predicted_change_pct": 0.0,
@@ -401,7 +431,7 @@ class AIPredictor:
         """Save trained model"""
         save_path = path or self.model_path
         torch.save(self.model.state_dict(), save_path)
-        print(f"Model saved to {save_path}")
+        logger.info(f"Model saved to {save_path}")
     
     def export_to_coreml(self, export_path: str = "models/patchtst_coreml.mlmodel"):
         """
@@ -413,18 +443,17 @@ class AIPredictor:
         try:
             import coremltools as ct
         except ImportError:
-            print("❌ Error: coremltools not installed.")
-            print("   Install it with: pip install coremltools")
+            logger.error("coremltools not installed. Install it with: pip install coremltools")
             return False
         
         # Check if model is trained
         if not self.is_trained and not os.path.exists(self.model_path):
-            print("❌ Error: No trained model found. Train the model first.")
+            logger.error("No trained model found. Train the model first.")
             return False
         
-        print("\n" + "="*60)
-        print("Exporting model to Core ML format...")
-        print("="*60)
+        logger.info("="*60)
+        logger.info("Exporting model to Core ML format...")
+        logger.info("="*60)
         
         # Load model if needed (in case we're exporting after training)
         if not hasattr(self, 'model') or self.model is None:
@@ -438,7 +467,7 @@ class AIPredictor:
         # Create example input
         example_input = torch.rand(1, 60, 10)
         
-        print("Tracing model for Core ML export...")
+        logger.info("Tracing model for Core ML export...")
         try:
             # Use trace with strict=False and multiple example inputs for better compatibility
             # This avoids issues with dynamic control flow in Core ML conversion
@@ -456,14 +485,14 @@ class AIPredictor:
                 scripted_model.eval()
                 
                 # Verify with all example inputs
-                print("Verifying traced model...")
+                logger.info("Verifying traced model...")
                 for i, test_input in enumerate(example_inputs):
                     test_output = scripted_model(test_input)
-                    print(f"  Test {i+1}: Output shape {test_output.shape} ✓")
+                    logger.info(f"  Test {i+1}: Output shape {test_output.shape} ✓")
                 
-                print("✅ Model traced and verified successfully")
+                logger.info("Model traced and verified successfully")
             
-            print("Converting to Core ML (via ONNX for better compatibility)...")
+            logger.info("Converting to Core ML (via ONNX for better compatibility)...")
             try:
                 # Try direct conversion first
                 coreml_model = ct.convert(
@@ -474,8 +503,8 @@ class AIPredictor:
                     minimum_deployment_target=ct.target.macOS13  # macOS 13+ for Neural Engine
                 )
             except Exception as direct_error:
-                print(f"⚠️  Direct conversion failed: {direct_error}")
-                print("   Trying ONNX intermediate format...")
+                logger.warning(f"Direct conversion failed: {direct_error}")
+                logger.info("Trying ONNX intermediate format...")
                 try:
                     # Export to ONNX first, then convert to Core ML
                     import tempfile
@@ -492,7 +521,7 @@ class AIPredictor:
                         dynamic_axes={'features': {0: 'batch'}, 'prediction': {0: 'batch'}},
                         opset_version=14
                     )
-                    print("✅ ONNX export successful")
+                    logger.info("ONNX export successful")
                     
                     # Convert ONNX to Core ML
                     coreml_model = ct.convert(
@@ -506,21 +535,21 @@ class AIPredictor:
                     # Clean up temp file
                     import os
                     os.unlink(onnx_path)
-                    print("✅ ONNX to Core ML conversion successful")
+                    logger.info("ONNX to Core ML conversion successful")
                 except Exception as onnx_error:
-                    print(f"❌ ONNX conversion also failed: {onnx_error}")
-                    print("\n" + "="*60)
-                    print("⚠️  Core ML Export Limitation")
-                    print("="*60)
-                    print("The PatchTST model uses PyTorch's fused transformer operations")
-                    print("which are not yet supported by Core ML conversion.")
-                    print("\n✅ Good News:")
-                    print("  - Your trained PyTorch model works perfectly!")
-                    print("  - You can use it with: python3 main.py")
-                    print("  - It will use MPS (Mac GPU) for fast inference")
-                    print("\n💡 The Core ML export is optional optimization.")
-                    print("   The PyTorch model provides excellent performance already.")
-                    print("="*60)
+                    logger.error(f"ONNX conversion also failed: {onnx_error}")
+                    logger.warning("="*60)
+                    logger.warning("Core ML Export Limitation")
+                    logger.warning("="*60)
+                    logger.warning("The PatchTST model uses PyTorch's fused transformer operations")
+                    logger.warning("which are not yet supported by Core ML conversion.")
+                    logger.info("Good News:")
+                    logger.info("  - Your trained PyTorch model works perfectly!")
+                    logger.info("  - You can use it with: python3 main.py")
+                    logger.info("  - It will use MPS (Mac GPU) for fast inference")
+                    logger.info("The Core ML export is optional optimization.")
+                    logger.info("The PyTorch model provides excellent performance already.")
+                    logger.warning("="*60)
                     raise onnx_error
             
             # Save the model
@@ -530,16 +559,16 @@ class AIPredictor:
             # Move model back to original device
             self.model = self.model.to(original_device)
             
-            print("\n" + "="*60)
-            print("✅ CoreML model exported successfully!")
-            print(f"✅ Model saved to: {export_path}")
-            print("✅ Model ready for Neural Engine inference")
-            print("="*60)
+            logger.info("="*60)
+            logger.info("CoreML model exported successfully!")
+            logger.info(f"Model saved to: {export_path}")
+            logger.info("Model ready for Neural Engine inference")
+            logger.info("="*60)
             
             return True
             
         except Exception as e:
-            print(f"\n❌ Error during Core ML conversion: {e}")
+            logger.error(f"Error during Core ML conversion: {e}", exc_info=True)
             # Move model back to original device even on error
             if hasattr(self, 'model') and self.model is not None:
                 self.model = self.model.to(original_device)
@@ -556,30 +585,32 @@ class AIPredictor:
             max_samples: Maximum number of samples to use (None = use all, recommended: 50000-100000)
         """
         if len(training_data) < 100:
-            print("Insufficient training data. Need at least 100 samples.")
+            logger.error("Insufficient training data. Need at least 100 samples.")
             return
+        
+        logger.info(f"Starting model training with {len(training_data)} samples")
         
         # Limit training data if too large (to prevent OOM and very long training times)
         if max_samples is None:
             # Auto-limit: if more than 100k samples, use 100k
             if len(training_data) > 100000:
-                print(f"⚠️  Large dataset detected: {len(training_data)} samples")
-                print(f"   Limiting to 100,000 samples for faster training and lower memory usage")
-                print(f"   (You can adjust with max_samples parameter if needed)")
+                logger.warning(f"Large dataset detected: {len(training_data)} samples")
+                logger.info("Limiting to 100,000 samples for faster training and lower memory usage")
+                logger.info("(You can adjust with max_samples parameter if needed)")
                 max_samples = 100000
         
         if max_samples and len(training_data) > max_samples:
-            print(f"📊 Limiting training data from {len(training_data)} to {max_samples} samples")
+            logger.info(f"Limiting training data from {len(training_data)} to {max_samples} samples")
             # Use most recent samples (they're already in reverse chronological order)
             training_data = training_data[:max_samples]
-            print(f"✅ Using {len(training_data)} samples for training")
+            logger.info(f"Using {len(training_data)} samples for training")
         
         # Create dataset and dataloader for efficient streaming
-        print("Creating dataset and DataLoader...")
+        logger.info("Creating dataset and DataLoader...")
         dataset = CryptoDataset(training_data)
         
         if len(dataset) < 50:
-            print(f"Insufficient valid training samples: {len(dataset)}")
+            logger.error(f"Insufficient valid training samples: {len(dataset)}")
             return
         
         # Use very small batch size to avoid memory overload on Mac
@@ -593,10 +624,10 @@ class AIPredictor:
             pin_memory=False  # MPS doesn't support pin_memory
         )
         
-        print(f"✅ Dataset created: {len(dataset)} samples")
-        print(f"✅ Using device: {self.device}")
-        print(f"✅ Batch size: {batch_size}")
-        print(f"✅ Total batches per epoch: {len(dataloader)}\n")
+        logger.info(f"Dataset created: {len(dataset)} samples")
+        logger.info(f"Using device: {self.device}")
+        logger.info(f"Batch size: {batch_size}")
+        logger.info(f"Total batches per epoch: {len(dataloader)}")
         
         # Training setup
         criterion = nn.MSELoss()
@@ -621,14 +652,14 @@ class AIPredictor:
                 if last_checkpoint_epoch < epochs:
                     start_epoch = last_checkpoint_epoch
                     checkpoint_path = f"models/patchtst_checkpoint_epoch{last_checkpoint_epoch}.pth"
-                    print(f"📂 Found checkpoint at epoch {last_checkpoint_epoch}")
-                    print(f"📂 Resuming training from epoch {start_epoch + 1}/{epochs}")
+                    logger.info(f"Found checkpoint at epoch {last_checkpoint_epoch}")
+                    logger.info(f"Resuming training from epoch {start_epoch + 1}/{epochs}")
                     try:
                         self.model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
-                        print(f"✅ Loaded checkpoint: {checkpoint_path}\n")
+                        logger.info(f"Loaded checkpoint: {checkpoint_path}")
                     except Exception as e:
-                        print(f"⚠️  Could not load checkpoint: {e}")
-                        print(f"   Starting from beginning...\n")
+                        logger.warning(f"Could not load checkpoint: {e}")
+                        logger.info("Starting from beginning...")
                         start_epoch = 0
         
         # Training loop
@@ -636,9 +667,9 @@ class AIPredictor:
         best_loss = float('inf')
         
         if start_epoch > 0:
-            print(f"🔄 Resuming training from epoch {start_epoch + 1}/{epochs}\n")
+            logger.info(f"Resuming training from epoch {start_epoch + 1}/{epochs}")
         else:
-            print("Starting training...\n")
+            logger.info("Starting training...")
         import time
         
         for epoch in range(start_epoch, epochs):
@@ -658,7 +689,7 @@ class AIPredictor:
                 
                 # Check for NaN/Inf loss
                 if torch.isnan(loss) or torch.isinf(loss):
-                    print(f"⚠️  Warning: NaN/Inf loss detected at epoch {epoch+1}, batch {batch_idx}")
+                    logger.warning(f"NaN/Inf loss detected at epoch {epoch+1}, batch {batch_idx}")
                     continue
                 
                 # Backward pass
@@ -684,7 +715,7 @@ class AIPredictor:
                         torch.mps.empty_cache()
             
             if num_batches == 0:
-                print(f"Error: No valid batches in epoch {epoch+1}. Stopping training.")
+                logger.error(f"No valid batches in epoch {epoch+1}. Stopping training.")
                 break
             
             avg_loss = total_loss / num_batches
@@ -692,7 +723,7 @@ class AIPredictor:
             
             # Check for NaN loss
             if not np.isfinite(avg_loss):
-                print(f"Error: NaN/Inf loss at epoch {epoch+1}. Stopping training.")
+                logger.error(f"NaN/Inf loss at epoch {epoch+1}. Stopping training.")
                 break
             
             scheduler.step(avg_loss)
@@ -708,15 +739,15 @@ class AIPredictor:
             
             # Display epoch number (epoch is 0-indexed, display as 1-indexed)
             display_epoch = epoch + 1
-            print(f"Epoch {display_epoch}/{epochs} | Loss: {avg_loss:.6f} | "
-                  f"LR: {optimizer.param_groups[0]['lr']:.8f} | "
-                  f"Time: {epoch_time:.1f}s | Memory: {memory_mb:.0f}MB | {device_info}")
+            logger.info(f"Epoch {display_epoch}/{epochs} | Loss: {avg_loss:.6f} | "
+                       f"LR: {optimizer.param_groups[0]['lr']:.8f} | "
+                       f"Time: {epoch_time:.1f}s | Memory: {memory_mb:.0f}MB | {device_info}")
             
             # Save checkpoint every 5 epochs
             if (epoch + 1) % 5 == 0:
                 checkpoint_path = f"models/patchtst_checkpoint_epoch{epoch+1}.pth"
                 torch.save(self.model.state_dict(), checkpoint_path)
-                print(f"  💾 Checkpoint saved: {checkpoint_path}")
+                logger.info(f"Checkpoint saved: {checkpoint_path}")
             
             # Save best model
             if avg_loss < best_loss:
@@ -745,10 +776,10 @@ class AIPredictor:
         
         # Final verification
         device_used = "MPS GPU" if self.device.type == "mps" else "CPU"
-        print("\n" + "="*60)
-        print("✅ Training completed!")
-        print(f"✅ Training complete on {device_used}")
-        print(f"✅ Final model saved to: {self.model_path}")
-        print(f"✅ Best loss: {best_loss:.6f}")
-        print("="*60)
+        logger.info("="*60)
+        logger.info("Training completed!")
+        logger.info(f"Training complete on {device_used}")
+        logger.info(f"Final model saved to: {self.model_path}")
+        logger.info(f"Best loss: {best_loss:.6f}")
+        logger.info("="*60)
 
