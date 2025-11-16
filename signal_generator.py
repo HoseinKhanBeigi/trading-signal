@@ -177,8 +177,11 @@ class SignalGenerator:
         elif momentum < 0:
             bearish_signals += 1
         
+        # Trend strength: strong upward trend = bullish, strong downward trend = bearish
         if trend_strength > 0.6:
             confirmations += 1
+        elif trend_strength < 0.4:  # Strong downward trend
+            bearish_signals += 1
         
         if rsi < 30:  # Oversold - bullish
             confirmations += 1
@@ -196,12 +199,16 @@ class SignalGenerator:
             bearish_signals += 1
         
         # Determine signal based on score and confirmations
+        # STRONG BUY: positive score, multiple confirmations, positive prediction
         if total_score > self.strong_threshold and confirmations >= 4 and price_prediction["predicted_change_pct"] > 0:
             return "STRONG BUY 🚀", "VERY STRONG", signal_details
-        elif total_score > self.weak_threshold and confirmations >= 2:
-            return "BUY 📈", "WEAK", signal_details
+        # STRONG SELL: negative score, multiple bearish signals, negative prediction
         elif total_score < -self.strong_threshold and bearish_signals >= 4 and price_prediction["predicted_change_pct"] < 0:
             return "STRONG SELL 🔻", "VERY STRONG", signal_details
+        # Regular BUY: positive score with some confirmations
+        elif total_score > self.weak_threshold and confirmations >= 2:
+            return "BUY 📈", "WEAK", signal_details
+        # Regular SELL: negative score with some bearish signals
         elif total_score < -self.weak_threshold and bearish_signals >= 2:
             return "SELL 📉", "WEAK", signal_details
         else:
