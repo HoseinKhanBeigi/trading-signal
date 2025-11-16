@@ -43,6 +43,8 @@ class CryptoVelocityTracker:
         self.weak_threshold = weak_threshold
         self.strong_threshold = strong_threshold
         self.last_signals = {symbol: {tf: None for tf in timeframes} for symbol in self.symbols}
+        self.last_alert_time = {symbol: {tf: 0.0 for tf in timeframes} for symbol in self.symbols}
+        self.alert_cooldown = 60.0  # 1 minute cooldown between alerts for same signal type (reduced from 5 min)
         
         # Logging control
         self.last_status_print = 0
@@ -190,23 +192,51 @@ class CryptoVelocityTracker:
             return
         
         # Only alert for VERY STRONG signals (STRONG BUY or STRONG SELL)
+        # IMPORTANT: Only alert if signal_type has changed AND cooldown period has passed
         if signal_strength == "VERY STRONG":
-            self.alert_handler.alert_signal(
-                symbol, timeframe, signal_type, signal_strength, 
-                velocity, change_pct, current_price, signal_details)
-            self.last_signals[symbol][timeframe] = signal_type
+            current_time = time.time()
+            last_alert_time = self.last_alert_time[symbol][timeframe]
+            time_since_last_alert = current_time - last_alert_time
             
-            # Save signal data (if enabled)
-            if self.data_collector and COLLECT_SIGNALS:
-                self.data_collector.save_signal(symbol, {
-                    "signal_type": signal_type,
-                    "signal_strength": signal_strength,
-                    "velocity": velocity,
-                    "change_pct": change_pct,
-                    "price": current_price,
-                    "timeframe": timeframe,
-                    **signal_details
-                })
+            # Check if this is a new signal (different from last one)
+            signal_changed = (last_signal != signal_type)
+            
+            # Check if cooldown period has passed
+            # For first alert (last_alert_time == 0), always allow
+            is_first_alert = (last_alert_time == 0.0)
+            cooldown_passed = is_first_alert or (time_since_last_alert >= self.alert_cooldown)
+            
+            if signal_changed and cooldown_passed:
+                # This is a NEW signal and cooldown passed - send alert
+                logger.info(f"New {signal_type} signal detected for {symbol} (was: {last_signal})")
+                try:
+                    self.alert_handler.alert_signal(
+                        symbol, timeframe, signal_type, signal_strength, 
+                        velocity, change_pct, current_price, signal_details)
+                    self.last_signals[symbol][timeframe] = signal_type
+                    self.last_alert_time[symbol][timeframe] = current_time
+                except Exception as e:
+                    logger.error(f"Error calling alert_handler.alert_signal(): {e}", exc_info=True)
+                
+                # Save signal data (if enabled)
+                if self.data_collector and COLLECT_SIGNALS:
+                    self.data_collector.save_signal(symbol, {
+                        "signal_type": signal_type,
+                        "signal_strength": signal_strength,
+                        "velocity": velocity,
+                        "change_pct": change_pct,
+                        "price": current_price,
+                        "timeframe": timeframe,
+                        **signal_details
+                    })
+            elif not signal_changed:
+                # Same signal as before - don't send duplicate alert
+                logger.debug(f"Same {signal_type} signal still active for {symbol}, skipping duplicate alert")
+            elif not cooldown_passed:
+                # Signal changed but cooldown not passed yet
+                remaining_cooldown = self.alert_cooldown - time_since_last_alert
+                logger.debug(f"Signal {signal_type} detected for {symbol} but cooldown active "
+                           f"({remaining_cooldown:.0f}s remaining), skipping alert")
     
     def _print_status_summary(self, results: Dict):
         """Print periodic status summary for all symbols"""

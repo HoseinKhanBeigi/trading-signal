@@ -43,27 +43,40 @@ class AlertHandler:
                       f"confidence={signal_details['prediction_confidence']*100:.1f}%)")
         logger.warning("="*80)
         
-        # Handle STRONG BUY signals
-        if "STRONG BUY" in signal_type and signal_strength == "VERY STRONG":
-            logger.info(f"Triggering alerts for STRONG BUY signal: {symbol}")
-            # Trigger system alert with sound
-            self._trigger_system_alert(symbol, signal_type, price, signal_details['predicted_change_pct'], is_buy=True)
-            # Send Telegram notification
-            self._send_telegram_alert(symbol, timeframe, signal_type, signal_strength, 
-                                     velocity, change_pct, price, signal_details)
+        # Check if this is a VERY STRONG signal that requires notification
+        is_very_strong = (signal_strength == "VERY STRONG")
+        is_strong_buy = ("STRONG BUY" in signal_type)
+        is_strong_sell = ("STRONG SELL" in signal_type)
         
-        # Handle STRONG SELL signals
-        elif "STRONG SELL" in signal_type and signal_strength == "VERY STRONG":
-            logger.info(f"Triggering alerts for STRONG SELL signal: {symbol}")
-            # Trigger system alert with sound
-            self._trigger_system_alert(symbol, signal_type, price, signal_details['predicted_change_pct'], is_buy=False)
-            # Send Telegram notification
-            self._send_telegram_alert(symbol, timeframe, signal_type, signal_strength, 
-                                     velocity, change_pct, price, signal_details)
+        # Determine if we should send notifications (BOTH BUY and SELL)
+        should_notify = is_very_strong and (is_strong_buy or is_strong_sell)
         
-        # Log if signal is STRONG but doesn't match expected patterns
-        elif "STRONG" in signal_type:
-            logger.warning(f"STRONG signal detected but not matched: {signal_type} (strength: {signal_strength})")
+        if should_notify:
+            # Determine signal direction
+            is_buy_signal = is_strong_buy
+            
+            # ALWAYS trigger system alert with sound for BOTH STRONG BUY and STRONG SELL
+            try:
+                self._trigger_system_alert(
+                    symbol, signal_type, price, 
+                    signal_details['predicted_change_pct'], 
+                    is_buy=is_buy_signal
+                )
+            except Exception as e:
+                logger.error(f"Failed to send system notification: {e}", exc_info=True)
+            
+            # ALWAYS send Telegram notification for BOTH STRONG BUY and STRONG SELL
+            try:
+                self._send_telegram_alert(
+                    symbol, timeframe, signal_type, signal_strength, 
+                    velocity, change_pct, price, signal_details
+                )
+            except Exception as e:
+                logger.error(f"Failed to send Telegram notification: {e}", exc_info=True)
+        else:
+            # Log why notification was not sent (only for unexpected cases)
+            if is_very_strong and not (is_strong_buy or is_strong_sell):
+                logger.warning(f"VERY STRONG signal detected but not BUY or SELL: {signal_type}")
     
     def _trigger_system_alert(self, symbol: str, signal_type: str, price: float, predicted_change: float, is_buy: bool = True):
         """
@@ -113,11 +126,12 @@ class AlertHandler:
                              price: float, signal_details: Dict):
         """
         Send Telegram notification for STRONG BUY/SELL signals
+        This method handles BOTH STRONG BUY and STRONG SELL signals
         
         Args:
             symbol: Cryptocurrency symbol (e.g., 'BTC')
             timeframe: Timeframe in minutes
-            signal_type: Signal type (e.g., 'STRONG BUY 🚀')
+            signal_type: Signal type (e.g., 'STRONG BUY 🚀' or 'STRONG SELL 🔻')
             signal_strength: Signal strength (e.g., 'VERY STRONG')
             velocity: Price velocity
             change_pct: Current price change percentage
@@ -125,11 +139,26 @@ class AlertHandler:
             signal_details: Dictionary with all signal details
         """
         if not TELEGRAM_ENABLED:
+            logger.warning("Telegram is disabled in config. Skipping Telegram notification.")
+            return
+        
+        # Determine if this is a BUY or SELL signal
+        is_buy = "BUY" in signal_type
+        is_sell = "SELL" in signal_type
+        
+        if not (is_buy or is_sell):
+            logger.warning(f"Unknown signal type for Telegram: {signal_type}")
             return
         
         try:
-            # Format Telegram message
-            emoji = "🚀" if "BUY" in signal_type else "🔻"
+            # Format Telegram message with appropriate emoji for BUY or SELL
+            if is_buy:
+                emoji = "🚀"
+                signal_label = "STRONG BUY"
+            else:
+                emoji = "🔻"
+                signal_label = "STRONG SELL"
+            
             message = f"{emoji} *{signal_type}*\n"
             message += f"━━━━━━━━━━━━━━━━━━━━\n\n"
             message += f"💰 *{symbol}/USDT*\n"
@@ -153,6 +182,8 @@ class AlertHandler:
             
             # Send to all configured chat IDs
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            success_count = 0
+            failure_count = 0
             
             for chat_id in TELEGRAM_CHAT_IDS:
                 payload = {
@@ -162,19 +193,31 @@ class AlertHandler:
                     "disable_web_page_preview": True
                 }
                 
-                response = requests.post(url, json=payload, timeout=5)
-                
-                if response.status_code == 200:
-                    # Success - message sent
-                    logger.debug(f"Telegram notification sent successfully to chat {chat_id}")
-                else:
-                    # Log error but don't interrupt main flow
-                    logger.warning(f"Telegram send failed for chat {chat_id}: {response.status_code}")
+                try:
+                    response = requests.post(url, json=payload, timeout=5)
                     
-        except requests.exceptions.RequestException as e:
-            # Network error - log but don't interrupt main flow
-            logger.warning(f"Telegram network error: {e}")
+                    if response.status_code == 200:
+                        success_count += 1
+                        logger.debug(f"Telegram {signal_label} notification sent successfully to chat {chat_id}")
+                    else:
+                        failure_count += 1
+                        error_msg = response.text if hasattr(response, 'text') else 'Unknown error'
+                        logger.warning(f"Telegram send failed for chat {chat_id}: HTTP {response.status_code} - {error_msg}")
+                        
+                except requests.exceptions.Timeout:
+                    failure_count += 1
+                    logger.error(f"Telegram timeout for chat {chat_id}")
+                except requests.exceptions.RequestException as e:
+                    failure_count += 1
+                    logger.error(f"Telegram request error for chat {chat_id}: {e}")
+            
+            # Summary log
+            if success_count > 0:
+                logger.info(f"Telegram {signal_label} notification sent: {success_count} success, {failure_count} failed")
+            else:
+                logger.error(f"All Telegram {signal_label} notifications failed ({failure_count} attempts)")
+                    
         except Exception as e:
             # Any other error - log but don't interrupt main flow
-            logger.warning(f"Telegram error: {e}")
+            logger.error(f"Telegram error: {e}", exc_info=True)
 

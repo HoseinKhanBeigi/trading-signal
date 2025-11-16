@@ -354,10 +354,31 @@ class AIPredictor:
         if not self.is_trained or len(feature_history) < 60:
             logger.debug(f"Using fallback prediction: is_trained={self.is_trained}, "
                         f"history_len={len(feature_history)}, current_price={current_price:.4f}")
-            # Fallback to simple prediction if model not trained or insufficient data
+            
+            # Fallback prediction: Use velocity-based estimate if we have recent features
+            # This prevents showing "same price" predictions
+            predicted_change_pct = 0.0
+            if len(feature_history) > 0:
+                try:
+                    # Try to extract velocity from the most recent feature
+                    last_feature = feature_history[-1]
+                    if isinstance(last_feature, np.ndarray) and len(last_feature) > 0:
+                        # Velocity is typically the first feature (index 0)
+                        # Scale it appropriately for 5-minute prediction
+                        velocity_feature = last_feature[0] if len(last_feature) > 0 else 0.0
+                        # Estimate 5-minute change based on velocity (velocity is %/min)
+                        predicted_change_pct = velocity_feature * 5.0  # 5 minutes ahead
+                        # Clamp to reasonable range
+                        predicted_change_pct = max(-5.0, min(5.0, predicted_change_pct))
+                except Exception as e:
+                    logger.debug(f"Could not extract velocity from features for fallback: {e}")
+                    predicted_change_pct = 0.0
+            
+            predicted_price = current_price * (1 + predicted_change_pct / 100)
+            
             return {
-                "predicted_price": current_price,
-                "predicted_change_pct": 0.0,
+                "predicted_price": predicted_price,
+                "predicted_change_pct": predicted_change_pct,
                 "confidence": 0.3,
                 "method": "fallback"
             }
@@ -402,10 +423,46 @@ class AIPredictor:
             
             # Denormalize prediction (we normalized targets by dividing by 10)
             predicted_change_pct = predicted_change_normalized * 10.0  # Scale back up
+            
+            # Log raw model output for debugging
+            logger.debug(f"Raw model output: normalized={predicted_change_normalized:.6f}, "
+                        f"denormalized={predicted_change_pct:.4f}%")
+            
+            # If model prediction is very small (< 0.05%), enhance it with velocity-based estimate
+            # This helps when model is too conservative
+            if abs(predicted_change_pct) < 0.05:  # Less than 0.05% change
+                try:
+                    last_feature = feature_history[-1]
+                    if isinstance(last_feature, np.ndarray) and len(last_feature) > 0:
+                        velocity_feature = last_feature[0] if len(last_feature) > 0 else 0.0
+                        velocity_based_change = velocity_feature * 5.0  # 5 minutes ahead
+                        
+                        # Blend model prediction with velocity-based estimate
+                        # Use weighted average: 70% model, 30% velocity (if velocity is significant)
+                        if abs(velocity_based_change) > 0.02:  # Velocity suggests > 0.02% change
+                            blended_change = (predicted_change_pct * 0.7) + (velocity_based_change * 0.3)
+                            logger.debug(f"Blending predictions: model={predicted_change_pct:.4f}%, "
+                                       f"velocity={velocity_based_change:.4f}%, "
+                                       f"blended={blended_change:.4f}%")
+                            predicted_change_pct = blended_change
+                        # If velocity is also small, keep model prediction but log it
+                        else:
+                            logger.debug(f"Model prediction very small ({predicted_change_pct:.4f}%) "
+                                       f"and velocity also small ({velocity_based_change:.4f}%)")
+                except Exception as e:
+                    logger.debug(f"Could not blend with velocity: {e}")
+            
+            # Clamp prediction to reasonable range
+            predicted_change_pct = max(-10.0, min(10.0, predicted_change_pct))
+            
             predicted_price = current_price * (1 + predicted_change_pct / 100)
             
-            # Calculate confidence (based on model certainty)
-            confidence = min(0.9, 0.5 + abs(predicted_change_normalized) * 2)
+            # Calculate confidence (based on model certainty and prediction magnitude)
+            # Higher confidence for larger predictions (model is more certain)
+            base_confidence = 0.5
+            magnitude_boost = min(0.3, abs(predicted_change_normalized) * 3)  # Up to 0.3 boost
+            certainty_boost = min(0.1, abs(predicted_change_pct) / 2)  # Additional boost for larger changes
+            confidence = min(0.95, base_confidence + magnitude_boost + certainty_boost)
             
             logger.info(f"Model prediction: current_price=${current_price:.4f} -> "
                        f"predicted_price=${predicted_price:.4f} "

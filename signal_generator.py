@@ -6,6 +6,9 @@ from typing import Dict, Tuple
 from indicators import TechnicalIndicators
 from price_prediction import PricePredictor
 from config import RSI_PERIOD, EMA_PERIOD, PREDICTION_MINUTES_AHEAD
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class SignalGenerator:
@@ -193,17 +196,26 @@ class SignalGenerator:
         elif ema_position == "BELOW":
             bearish_signals += 1
         
-        if price_prediction["predicted_change_pct"] > 0.1:
+        # Check prediction direction
+        predicted_change = price_prediction["predicted_change_pct"]
+        if predicted_change > 0.1:
             confirmations += 1
-        elif price_prediction["predicted_change_pct"] < -0.1:
+        elif predicted_change < -0.05:  # Lowered threshold from -0.1% to -0.05% for bearish
             bearish_signals += 1
+        
+        # Special case: Very overbought RSI (>80) with negative velocity and negative prediction
+        # This is a strong bearish signal even if we don't have 4 confirmations
+        if rsi > 80 and velocity < 0 and predicted_change < 0:
+            bearish_signals += 1  # Extra bearish signal for extreme overbought
         
         # Determine signal based on score and confirmations
         # STRONG BUY: positive score, multiple confirmations, positive prediction
         if total_score > self.strong_threshold and confirmations >= 4 and price_prediction["predicted_change_pct"] > 0:
             return "STRONG BUY 🚀", "VERY STRONG", signal_details
         # STRONG SELL: negative score, multiple bearish signals, negative prediction
-        elif total_score < -self.strong_threshold and bearish_signals >= 4 and price_prediction["predicted_change_pct"] < 0:
+        # Also trigger if extreme overbought (RSI>85) with negative velocity and prediction
+        elif (total_score < -self.strong_threshold and bearish_signals >= 4 and price_prediction["predicted_change_pct"] < 0) or \
+             (rsi > 85 and velocity < -self.weak_threshold and bearish_signals >= 3 and price_prediction["predicted_change_pct"] < -0.05):
             return "STRONG SELL 🔻", "VERY STRONG", signal_details
         # Regular BUY: positive score with some confirmations
         elif total_score > self.weak_threshold and confirmations >= 2:
