@@ -20,6 +20,7 @@ class TechnicalIndicators:
     6. ATR - Volatility Measurement
     7. ADX - Trend Strength
     8. Support/Resistance - Key Levels
+    9. Fibonacci Retracements - Support/Resistance Levels (23.6%, 38.2%, 50%, 61.8%, 78.6%)
     """
     
     def __init__(self, price_tracker):
@@ -177,6 +178,111 @@ class TechnicalIndicators:
             "resistance": resistance,
             "current_position": position,
             "position_pct": ((current_price - support) / price_range * 100) if price_range > 0 else 50
+        }
+    
+    def calculate_fibonacci_retracement(self, symbol: str, timeframe: int) -> Dict:
+        """
+        Calculate Fibonacci Retracement levels - IMPORTANT for identifying support/resistance
+        Based on the swing high and low in the price history
+        
+        Fibonacci levels:
+        - 0% (swing low)
+        - 23.6% (weak level)
+        - 38.2% (moderate level)
+        - 50% (common retracement, not Fibonacci but widely used)
+        - 61.8% (golden ratio - strongest level)
+        - 78.6% (deep retracement)
+        - 100% (swing high)
+        
+        Returns:
+            Dict with Fibonacci levels and current price position
+        """
+        prices = self.price_tracker.get_price_history(symbol, timeframe)
+        if len(prices) < 10:
+            current_price = prices[-1] if prices else 0
+            return {
+                "swing_high": current_price,
+                "swing_low": current_price,
+                "levels": {},
+                "current_level": "UNKNOWN",
+                "nearest_level": None,
+                "distance_to_level": 0.0
+            }
+        
+        # Find swing high and low (highest and lowest prices in the period)
+        swing_high = max(prices)
+        swing_low = min(prices)
+        current_price = prices[-1]
+        
+        price_range = swing_high - swing_low
+        if price_range == 0:
+            return {
+                "swing_high": swing_high,
+                "swing_low": swing_low,
+                "levels": {},
+                "current_level": "NEUTRAL",
+                "nearest_level": None,
+                "distance_to_level": 0.0
+            }
+        
+        # Calculate Fibonacci retracement levels
+        # For uptrend: retracement from high to low
+        # For downtrend: retracement from low to high
+        # We'll calculate both directions and use the one that makes sense
+        
+        # Standard Fibonacci retracement levels (as percentages)
+        fib_levels = {
+            0.0: swing_low,           # 0% - swing low
+            0.236: swing_high - (price_range * 0.236),  # 23.6%
+            0.382: swing_high - (price_range * 0.382),  # 38.2%
+            0.500: swing_high - (price_range * 0.500),  # 50% (not Fibonacci but common)
+            0.618: swing_high - (price_range * 0.618),  # 61.8% (golden ratio - strongest)
+            0.786: swing_high - (price_range * 0.786),  # 78.6%
+            1.0: swing_high           # 100% - swing high
+        }
+        
+        # Determine which Fibonacci level the current price is near
+        nearest_level = None
+        min_distance = float('inf')
+        current_level_pct = None
+        
+        for level_pct, level_price in fib_levels.items():
+            distance = abs(current_price - level_price)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_level = level_pct
+                current_level_pct = level_pct
+        
+        # Determine position relative to Fibonacci levels
+        if current_price >= swing_high * 0.99:  # Near swing high
+            current_level = "ABOVE_100"
+        elif current_price <= swing_low * 1.01:  # Near swing low
+            current_level = "BELOW_0"
+        elif nearest_level == 0.618:
+            current_level = "NEAR_618"  # Golden ratio - very important
+        elif nearest_level == 0.382:
+            current_level = "NEAR_382"
+        elif nearest_level == 0.500:
+            current_level = "NEAR_50"
+        elif nearest_level == 0.236:
+            current_level = "NEAR_236"
+        elif nearest_level == 0.786:
+            current_level = "NEAR_786"
+        else:
+            current_level = "BETWEEN_LEVELS"
+        
+        # Calculate distance as percentage of price range
+        distance_pct = (min_distance / price_range * 100) if price_range > 0 else 0
+        
+        return {
+            "swing_high": swing_high,
+            "swing_low": swing_low,
+            "levels": {f"{int(k*100)}%": v for k, v in fib_levels.items()},
+            "current_level": current_level,
+            "nearest_level": f"{int(nearest_level*100)}%" if nearest_level is not None else None,
+            "distance_to_level": distance_pct,
+            "price_range": price_range,
+            "retracement_pct": ((swing_high - current_price) / price_range * 100) if price_range > 0 else 0
         }
     
     def calculate_macd(self, symbol: str, timeframe: int, 

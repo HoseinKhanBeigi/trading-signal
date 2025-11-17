@@ -40,6 +40,7 @@ class SignalGenerator:
         - RSI (overbought/oversold)
         - EMA (moving average position)
         - Support/Resistance levels
+        - Fibonacci Retracement levels (23.6%, 38.2%, 50%, 61.8%, 78.6%)
         - Price Prediction
         
         Signal Levels:
@@ -61,6 +62,19 @@ class SignalGenerator:
         rsi = self.indicators.calculate_rsi(symbol, timeframe, RSI_PERIOD)
         ema_result = self.indicators.calculate_ema(symbol, timeframe, EMA_PERIOD)
         support_resistance = self.indicators.calculate_support_resistance(symbol, timeframe)
+        
+        # Calculate Fibonacci retracement levels
+        try:
+            fibonacci = self.indicators.calculate_fibonacci_retracement(symbol, timeframe)
+        except Exception:
+            fibonacci = {
+                "swing_high": current_price,
+                "swing_low": current_price,
+                "levels": {},
+                "current_level": "UNKNOWN",
+                "nearest_level": None,
+                "distance_to_level": 100.0
+            }
         
         # Handle None values for calculations
         if momentum is None:
@@ -119,6 +133,7 @@ class SignalGenerator:
             'bollinger': bollinger_data,
             'atr': atr_value,
             'adx': adx_data,
+            'fibonacci': fibonacci,
             'current_price': current_price
         }
         
@@ -137,6 +152,9 @@ class SignalGenerator:
             "support": support_resistance["support"],
             "resistance": support_resistance["resistance"],
             "price_position": support_resistance["current_position"],
+            "fibonacci_level": fibonacci["current_level"],
+            "fibonacci_nearest": fibonacci["nearest_level"],
+            "fibonacci_distance": fibonacci["distance_to_level"],
             "predicted_price": price_prediction["predicted_price"],
             "predicted_change_pct": price_prediction["predicted_change_pct"],
             "prediction_confidence": price_prediction["confidence"],
@@ -164,7 +182,41 @@ class SignalGenerator:
             ema_score = -0.05  # Bearish
         ema_score *= 0.1  # 10% weight
         
-        total_score = velocity_score + momentum_score + trend_score + rsi_score + ema_score
+        # Fibonacci retracement contribution
+        # Price near key Fibonacci levels (especially 61.8%) can act as support/resistance
+        fib_score = 0.0
+        fib_level = fibonacci.get("current_level", "UNKNOWN")
+        fib_distance = fibonacci.get("distance_to_level", 100.0)
+        
+        # If price is very close to a key Fibonacci level (< 3% distance), it's significant
+        if fib_distance < 3.0:
+            if fib_level == "NEAR_618":  # Golden ratio - strongest level
+                # Near 61.8% retracement - potential reversal point
+                # If price is bouncing from this level, it's a strong signal
+                if velocity > 0:  # Bouncing up from 61.8% = bullish
+                    fib_score = 0.08
+                elif velocity < 0:  # Rejecting from 61.8% = bearish
+                    fib_score = -0.08
+            elif fib_level == "NEAR_382":  # 38.2% - moderate level
+                if velocity > 0:
+                    fib_score = 0.05
+                elif velocity < 0:
+                    fib_score = -0.05
+            elif fib_level == "NEAR_50":  # 50% - common retracement
+                if velocity > 0:
+                    fib_score = 0.04
+                elif velocity < 0:
+                    fib_score = -0.04
+            elif fib_level == "BELOW_0":  # Near swing low - potential support
+                if velocity > 0:  # Bouncing from low = bullish
+                    fib_score = 0.06
+            elif fib_level == "ABOVE_100":  # Near swing high - potential resistance
+                if velocity < 0:  # Rejecting from high = bearish
+                    fib_score = -0.06
+        
+        fib_score *= 0.1  # 10% weight for Fibonacci
+        
+        total_score = velocity_score + momentum_score + trend_score + rsi_score + ema_score + fib_score
         
         # Count confirmations
         confirmations = 0
@@ -195,6 +247,18 @@ class SignalGenerator:
             confirmations += 1
         elif ema_position == "BELOW":
             bearish_signals += 1
+        
+        # Fibonacci level confirmation
+        # Price near key Fibonacci levels with appropriate velocity is a confirmation
+        if fib_distance < 3.0:  # Very close to Fibonacci level (< 3% of price range)
+            if fib_level in ["NEAR_618", "NEAR_382", "NEAR_50"] and velocity > 0:
+                confirmations += 1  # Bouncing from Fibonacci support = bullish
+            elif fib_level in ["NEAR_618", "NEAR_382", "NEAR_50"] and velocity < 0:
+                bearish_signals += 1  # Rejecting from Fibonacci resistance = bearish
+            elif fib_level == "BELOW_0" and velocity > 0:
+                confirmations += 1  # Bouncing from swing low = bullish
+            elif fib_level == "ABOVE_100" and velocity < 0:
+                bearish_signals += 1  # Rejecting from swing high = bearish
         
         # Check prediction direction
         predicted_change = price_prediction["predicted_change_pct"]

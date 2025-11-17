@@ -166,9 +166,17 @@ class CryptoVelocityTracker:
             if signal_changed or time_passed:
                 timestamp = datetime.now().strftime("%H:%M:%S")
                 change_indicator = " ⚡ CHANGED" if signal_changed else ""
+                
+                # Add Fibonacci info if near a level
+                fib_level = signal_details.get('fibonacci_nearest', None)
+                fib_distance = signal_details.get('fibonacci_distance', 100.0)
+                fib_str = ""
+                if fib_distance < 5.0 and fib_level:
+                    fib_str = f" | Fib: {fib_level}"
+                
                 log_msg = f"[{timestamp}] {symbol}/USDT ({timeframe}min): {signal_type}{change_indicator} | " \
                          f"Velocity: {velocity:+.4f} %/min | Change: {change_pct:+.3f}% | " \
-                         f"Price: ${current_price:.4f} | RSI: {signal_details.get('rsi', 0):.1f}"
+                         f"Price: ${current_price:.4f} | RSI: {signal_details.get('rsi', 0):.1f}{fib_str}"
                 
                 if signal_strength == "VERY STRONG":
                     logger.warning(log_msg)  # Use WARNING level for strong signals
@@ -275,12 +283,19 @@ class CryptoVelocityTracker:
                 momentum = signal_details.get('momentum', 0)
                 trend = signal_details.get('trend_strength', 0) * 100
                 predicted_change = signal_details.get('predicted_change_pct', 0)
+                fib_level = signal_details.get('fibonacci_nearest', 'N/A')
+                fib_distance = signal_details.get('fibonacci_distance', 100.0)
+                
+                # Show Fibonacci info if price is near a level
+                fib_info = ""
+                if fib_distance < 5.0:  # Show if within 5% of a Fibonacci level
+                    fib_info = f" | Fib: {fib_level} ({fib_distance:.1f}%)"
                 
                 logger.info(f"{symbol}/USDT ({timeframe}min): Price: ${current_price:.4f} | "
                            f"Change: {change_pct:+.3f}% | Velocity: {velocity:+.4f} %/min | "
                            f"Signal: {signal_type} ({signal_strength}) | "
                            f"RSI={rsi:.1f} | Momentum={momentum:+.4f} | Trend={trend:.1f}% | "
-                           f"AI Prediction: {predicted_change:+.3f}% | Data Points: {data_points}/{timeframe*20}")
+                           f"AI Prediction: {predicted_change:+.3f}%{fib_info} | Data Points: {data_points}/{timeframe*20}")
         
         logger.info("="*80)
     
